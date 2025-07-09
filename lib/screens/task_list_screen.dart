@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/task.dart';
 import '../services/api_service.dart';
+import 'AddTaskDialog.dart';
 
 class TaskListScreen extends StatefulWidget {
   const TaskListScreen({super.key});
@@ -10,6 +12,7 @@ class TaskListScreen extends StatefulWidget {
 }
 
 class _TaskListScreenState extends State<TaskListScreen> {
+  String currentUsername = '';
   late Future<List<Task>> _tasksFuture;
   Map<String, List<Task>> tasksByStatus = {
     "Пулл": [],
@@ -22,11 +25,61 @@ class _TaskListScreenState extends State<TaskListScreen> {
   void initState() {
     super.initState();
     _tasksFuture = ApiService.fetchTasks();
+    _loadUsername();
+    _refreshTasks();
     _tasksFuture.then((tasks) {
       setState(() {
         _groupTasksByStatus(tasks);
       });
     });
+  }
+  Color getCardColor(String status) {
+    switch (_normalizeStatus(status)) {
+      case 'Пулл':
+        return const Color(0xFFE3F2FD); // светло-синий
+      case 'В работе':
+        return const Color(0xFFFFF9C4); // светло-жёлтый
+      case 'Тестирование':
+        return const Color(0xFFF8BBD0); // светло-розовый
+      case 'Выполнено':
+        return const Color(0xFFC8E6C9); // светло-зелёный
+      default:
+        return Colors.white;
+    }
+  }
+
+  Future<void> _refreshTasks() async {
+    final tasks = await ApiService.fetchTasks();
+    setState(() {
+      _groupTasksByStatus(tasks);
+      _tasksFuture = Future.value(tasks); // обновим future
+    });
+  }
+  Future<void> _loadUsername() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() {
+      currentUsername = prefs.getString('username') ?? 'Пользователь';
+    });
+  }
+
+  Future<void> _openUserProfile() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    final username = prefs.getString('username');
+
+    if (username != null && username.isNotEmpty) {
+      final result = await Navigator.pushNamed(context, '/profile', arguments: username);
+      // если пользователь обновил имя и вернулся назад
+      if (result is String && result != currentUsername) {
+        prefs.setString('username', result); // обновим локально
+        setState(() {
+          currentUsername = result;
+        });
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Пользователь не найден')),
+      );
+    }
   }
 
   void _groupTasksByStatus(List<Task> allTasks) {
@@ -38,33 +91,65 @@ class _TaskListScreenState extends State<TaskListScreen> {
     };
 
     for (var task in allTasks) {
-      // Приводим статус к нужному виду с большой буквы, например
       String normalizedStatus = _normalizeStatus(task.status);
       if (tasksByStatus.containsKey(normalizedStatus)) {
         tasksByStatus[normalizedStatus]!.add(task);
       } else {
-        // Если статус новый — можно добавить или игнорировать
         tasksByStatus[normalizedStatus] = [task];
       }
     }
   }
 
   String _normalizeStatus(String status) {
-    // Пример: первый символ заглавный, остальные строчные
     if (status.isEmpty) return status;
     return status[0].toUpperCase() + status.substring(1).toLowerCase();
   }
 
+  void _handleTaskAdded(Task newTask) {
+    setState(() {
+      tasksByStatus[newTask.status]?.add(newTask);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Список задач'),
+        title: Row(
+          children: [
+            const Text('Список задач', style: TextStyle(color: Colors.white)),
+            const SizedBox(width: 16),
+            ElevatedButton.icon(
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AddTaskDialog(onTaskAdded: _handleTaskAdded),
+                );
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Добавить'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+                textStyle: const TextStyle(fontSize: 14),
+              ),
+            ),
+            const Spacer(),
+            Text(
+              currentUsername,
+              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.account_circle, color: Colors.black),
+              onPressed: _openUserProfile,
+            ),
+          ],
+        ),
+        backgroundColor: Colors.blue,
+        automaticallyImplyLeading: false,
       ),
-      body: _tasksFuture == null
-          ? const Center(child: CircularProgressIndicator())
-          : FutureBuilder<List<Task>>(
+      body: FutureBuilder<List<Task>>(
         future: _tasksFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -88,7 +173,6 @@ class _TaskListScreenState extends State<TaskListScreen> {
     );
   }
 
-
   Widget buildColumn(String status) {
     final tasks = tasksByStatus[status] ?? [];
 
@@ -110,17 +194,15 @@ class _TaskListScreenState extends State<TaskListScreen> {
                 onWillAccept: (task) => task?.status != status,
                 onAccept: (task) async {
                   String oldStatus = task.status;
-
                   setState(() {
                     tasksByStatus[oldStatus]?.remove(task);
                     task.status = status;
                     tasksByStatus[status]?.add(task);
                   });
-                  print(task);
                   final success = await ApiService.updateTask(task);
                   if (!success) {
                     setState(() {
-                      tasksByStatus[oldStatus]?.removeWhere((t) => t.id.toString() == task.id.toString());
+                      tasksByStatus[status]?.remove(task);
                       task.status = oldStatus;
                       tasksByStatus[oldStatus]?.add(task);
                     });
@@ -166,11 +248,9 @@ class _TaskListScreenState extends State<TaskListScreen> {
     );
   }
 
-
-
-
   Widget buildTaskCard(Task task) {
     return Card(
+      color: getCardColor(task.status),
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       elevation: 2,
       shape: RoundedRectangleBorder(
@@ -178,9 +258,13 @@ class _TaskListScreenState extends State<TaskListScreen> {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
-        onTap: () {
-          Navigator.pushNamed(context, '/task_detail', arguments: task.id);
+        onTap: () async {
+          final updated = await Navigator.pushNamed(context, '/task_detail', arguments: task.id);
+          if (updated == true) {
+            _refreshTasks(); // перезагружаем список
+          }
         },
+
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(

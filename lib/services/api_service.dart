@@ -41,6 +41,49 @@ class ApiService {
     }
   }
 
+  static Future<Task?> createTask(Task task) async {
+    final url = Uri.parse('$baseUrl/insert');
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "status": task.status,
+        "dateCreated": task.dateCreated,
+        "dateDeadline": task.dateDeadline,
+        "dateCompleted": task.dateCompleted,
+        "assignees": task.assignees.split(',').map((s) => s.trim()).toList(),
+      }),
+    );
+
+    if (response.statusCode == 201) {
+      return Task.fromJson(jsonDecode(response.body));
+    } else {
+      print("Ошибка при создании: ${response.body}");
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>> fetchUserByUsername(String username) async {
+    final response = await http.get(Uri.parse('$baseUrl/user_by_username/$username'));
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Не удалось загрузить пользователя');
+    }
+  }
+
+  static Future<bool> updateUserByUsername(String username, Map<String, dynamic> userData) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/user_by_username/$username'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(userData),
+    );
+    return response.statusCode == 200;
+  }
+
 
   static Future<List<Task>> fetchTasks() async {
     final response = await http.get(Uri.parse('$baseUrl/select_all'));
